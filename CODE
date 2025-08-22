@@ -1,0 +1,230 @@
+
+#define BLYNK_TEMPLATE_ID "TMPL3rAcFi9NJ" //add your blynk template ID 
+#define BLYNK_TEMPLATE_NAME "SMART IOT FARM IRRIGATION SYSTEM" //enter your template name
+#define BLYNK_AUTH_TOKEN "NV9Z0mPXH1oe8I4m-fcBwlmQB6-n7piD" //add you auth token from blynk in deviceinfo
+
+#include <Wire.h>
+#include <LiquidCrystal_I2C.h>
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+#include <ESP8266HTTPClient.h>
+#include <ArduinoJson.h>
+
+//#define BLYNK_TEMPLATE_ID "TMPL3rAcFi9NJ" //add your blynk template ID 
+//#define BLYNK_TEMPLATE_NAME "SMART IOT FARM IRRIGATION SYSTEM" //enter your template name
+//#define BLYNK_AUTH_TOKEN "NV9Z0mPXH1oe8I4m-fcBwlmQB6-n7piD" //add you auth token from blynk in deviceinfo
+
+#define BLYNK_PRINT Serial
+
+// Specify your SDA and SCL pins here
+#define SDA_PIN D2
+#define SCL_PIN D1
+
+LiquidCrystal_I2C lcd(0x27, 16, 2); // Address 0x27, 16 columns, 2 rows
+
+char auth[] = "NV9Z0mPXH1oe8I4m-fcBwlmQB6-n7piD";
+char ssid[] = "testdevice"; // type your wifi name
+char pass[] = "12345678"; // type your wifi password
+
+BlynkTimer timer;
+
+// Put your location Credentials here
+String lat = "12.97962688264605"; // keep this lat and lon same, DONT CHANGE ANYTHING
+String lon = "77.52593235423015";
+String ApiKey = "07684c11ecc519e7a932eaa3767a11ed"; //DONT CHANGE!
+String URL = "http://api.openweathermap.org/data/2.5/weather?";
+
+int manualControlValue = 0; // Variable to store manual control value
+int manualWeatherMode = 0;// Variable to store manual weather mode status
+int manualHumidityMode = 0; // Variable to store manual humidity mode status
+unsigned long manualControlStartTime = 0; // Variable to store the time when manual control was activated
+
+void setup() {
+  pinMode(A0, INPUT);
+  pinMode(13, OUTPUT); // Set pin 13 as output
+  Serial.begin(115200);
+  Blynk.begin(auth, ssid, pass);
+  Wire.begin(SDA_PIN, SCL_PIN); // Initialize I2C with specified SDA and SCL pins
+  lcd.init();                   // Initialize the LCD
+  lcd.backlight();              // Turn on backlight
+  timer.setInterval(2500L, sendSensor);
+
+  // Register virtual pin handlers
+  Blynk.virtualWrite(V13, manualControlValue);
+  Blynk.virtualWrite(V14, manualWeatherMode);
+}
+
+void loop() {
+  Blynk.run();
+  timer.run();
+  updateWeather(); 
+}
+
+void sendSensor() {
+  int data = analogRead(A0);
+      data = map(data, 0, 1023, 0, 100);
+      data = (data - 100) * -1;
+  // Check manual control for irrigation
+  if (manualControlValue == 1) {
+    digitalWrite(13, HIGH); // Turn on pin 13 if manual control is enabled
+
+    // Check if 5 seconds have passed since manual control was activated
+    if (millis() - manualControlStartTime >= 3000) {
+      digitalWrite(13, LOW); // Turn off pin 13
+      manualControlValue = 0; // Turn off manual control
+      Blynk.virtualWrite(V13, manualControlValue); // Update Blynk app
+    }
+  } else {
+    Blynk.logEvent("cloud_rain2", "pump is off");
+    digitalWrite(13, LOW); // Turn off pin 13
+    
+    
+    if (data < 20 && manualHumidityMode == 0) {
+      Blynk.logEvent("cloud_rain", "pump is on");
+      digitalWrite(13, HIGH);
+      delay(5000);
+    }
+  }
+  
+  Blynk.virtualWrite(V5, data);
+  Serial.print("Pin A0: ");
+  Serial.println(data);
+
+  // Display the input value and output status on LCD
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("M:");
+  lcd.setCursor(3, 0);
+  lcd.print(data);
+  lcd.setCursor(8, 0);
+  lcd.print("P:");
+  lcd.setCursor(11, 0);
+  lcd.print(manualControlValue == 1 ? "ON" : (digitalRead(13) == HIGH ? "ON" : "OFF"));
+
+  // Update weather info on LCD
+  updateWeather();
+  
+}
+
+void updateWeather() {
+  if (WiFi.status() == WL_CONNECTED) {
+    HTTPClient http;
+    WiFiClient client;
+    
+    // Check if manual weather mode is activated
+    if (manualWeatherMode == 1) {
+      Serial.println("Using Manual Weather Mode");
+      // Use predefined weather conditions and humidity levels
+      const char *description = "clear sky"; // Change this to simulate different weather conditions
+      float temp = 25.0; // Change this to simulate different temperatures
+     // float humidity = 25.0; // Change this to simulate different humidity levels
+      float humidity = (manualHumidityMode == 1) ? 95.0 : 25.0; // Change humidity based on manual mode
+      // Call weather-based irrigation logic
+      weatherBasedIrrigation(description, humidity, temp);
+    } else {
+      Serial.println("Fetching Weather Data from API");
+      // Fetch weather data from OpenWeatherMap API
+      http.begin(client, URL + "lat=" + lat + "&lon=" + lon + "&units=metric&appid=" + ApiKey);
+      int httpCode = http.GET();
+  
+      if (httpCode > 0) {
+        String JSON_Data = http.getString();
+        DynamicJsonDocument doc(2048);
+        deserializeJson(doc, JSON_Data);
+        JsonObject obj = doc.as<JsonObject>();
+  
+        const char *description = obj["weather"][0]["description"];
+        float temp = obj["main"]["temp"];
+        float humidity = obj["main"]["humidity"];
+         String message = String(description) + " " + String(temp) + "C," + String(humidity) + " %";
+        
+      // Scroll the message
+      for (int i = 0; i < message.length() - 15; i++) {
+        //lcd.clear();
+        lcd.setCursor(0, 1);
+        lcd.print(message.substring(i, i + 16)); // Display 16 characters of the message
+          Blynk.logEvent("weather", message);
+        delay(500); // Adjust the delay to control the scrolling speed
+      
+      // weatherBasedIrrigation(description, humidity,temp);
+      }
+      } else {
+        Serial.println("Error!");
+        lcd.setCursor(0, 1);
+        lcd.print("Can't Get DATA!");
+        delay(2000); // Delay before retrying to get data
+      }
+      http.end();
+    }
+  }
+}
+
+void weatherBasedIrrigation(const char *description, float humidity, float temp) {
+  // Weather-based irrigation logic
+  if (strcmp(description, "clear sky") == 0) {
+    String message = String(description) + " " + String(temp) + "C," + String(humidity) + " %";
+    // Scroll the message
+    for (int i = 0; i < message.length() - 15; i++) {
+      //lcd.clear();
+      lcd.setCursor(0, 1);
+      lcd.print(message.substring(i, i + 16)); // Display 16 characters of the message
+      delay(500); // Adjust the delay to control the scrolling speed
+ // Serial.println("Logging weather data to Blynk log event:");
+      //  Serial.println(message);
+    //  Blynk.logEvent("Weather", message);
+    }
+    if (humidity < 30.0 && map(analogRead(A0), 0, 1023, 0, 100) > 20) {
+   
+      // If weather is sunny and humidity is below 30%, start irrigation
+      stopIrrigation();
+      }
+    } else if (humidity > 90.0) {
+       lcd.print("P:");
+       lcd.setCursor(11, 0);
+       lcd.print("OFF");
+
+      // If weather is sunny and humidity is above 90%, stop irrigation
+      stopIrrigation();
+      }else {
+      // If humidity is within the specified range, check soil moisture level
+      if (digitalRead(13) == HIGH) {
+        stopIrrigation();
+      } else {
+        startIrrigation();
+      }
+    }
+}
+void startIrrigation() {
+   Serial.println("Starting Irrigation");
+    Blynk.logEvent("cloud_rain", "pump is on");
+  // Your irrigation start logic here
+  // For example, turn on a relay connected to the irrigation system
+  digitalWrite(13, HIGH); // Example: Turn on irrigation relay
+}
+
+void stopIrrigation() {
+   Serial.println("Stopping Irrigation");
+   Blynk.logEvent("cloud_rain2", "pump is off");
+  // Your irrigation stop logic here
+  // For example, turn off the relay connected to the irrigation system
+  digitalWrite(13, LOW); // Example: Turn off irrigation relay
+}
+
+// Virtual pin handler for manual control
+BLYNK_WRITE(V13) {
+  manualControlValue = param.asInt();
+
+  // If manual control is activated, record the start time
+  if (manualControlValue == 1) {
+    manualControlStartTime = millis();
+  }
+}
+
+// Virtual pin handler for manual weather mode control
+BLYNK_WRITE(V14) {
+  manualWeatherMode = param.asInt();
+}
+// Virtual pin handler for manual humidity mode control
+BLYNK_WRITE(V15) {
+  manualHumidityMode = param.asInt();
+}
