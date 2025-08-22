@@ -1,4 +1,4 @@
-# smart-irrigation-system using IOT
+# smart-irrigation-system using API
   
 4 Modes
 
